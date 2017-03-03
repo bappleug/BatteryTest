@@ -16,10 +16,22 @@
 
 package com.lexing.batterytest;
 
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.os.BatteryManager;
+
+import com.lexing.batterytest.batteryhelper.AutoBootAppInfo;
+import com.lexing.batterytest.batteryhelper.BatterySipper;
+import com.lexing.batterytest.batteryhelper.RunningAppInfo;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.List;
 
 /**
  * Contains utility functions for formatting elapsed time and consumed bytes
@@ -83,7 +95,7 @@ public class Utils {
 		} else if (bytes > 1024) {
 			return String.format("%.2f KB", ((int) (bytes / 10)) / 100f);
 		} else {
-			return String.format("%d bytes", (int) bytes);
+			return String.format("%ruid bytes", (int) bytes);
 		}
 	}
 
@@ -119,4 +131,110 @@ public class Utils {
 
 		return statusString;
 	}
+
+	public static void getQuickNameIcon(Context context, BatterySipper sipper) {
+		PackageManager pm = context.getPackageManager();
+		try {
+			ApplicationInfo appInfo = pm.getApplicationInfo(sipper.getPkgName(), 0);
+			sipper.setIcon(appInfo.loadIcon(pm));// pm.getApplicationIcon(appInfo);
+			sipper.setName(appInfo.loadLabel(pm).toString());// pm.getApplicationLabel(appInfo).toString();
+		} catch (PackageManager.NameNotFoundException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public static void getQuickNameIcon(Context context, RunningAppInfo runningAppInfo) {
+		PackageManager pm = context.getPackageManager();
+		try {
+			ApplicationInfo appInfo = pm.getApplicationInfo(runningAppInfo.pkgName, 0);
+			runningAppInfo.icon = appInfo.loadIcon(pm);// pm.getApplicationIcon(appInfo);
+			runningAppInfo.name = appInfo.loadLabel(pm).toString();// pm.getApplicationLabel(appInfo).toString();
+		} catch (PackageManager.NameNotFoundException e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Use reflect to get Package Usage Statistics data.<br>
+	 */
+	public static void getAutoBootsNum(Context context, List<AutoBootAppInfo> autoBootAppInfos) {
+		UsageStatsManager mUsageStatsManager = (UsageStatsManager) context.getSystemService(Context.USAGE_STATS_SERVICE);
+		long endTime = System.currentTimeMillis();
+		long beginTime = endTime - 1000 * 60 * 60 * 24;
+		List<UsageStats> usageStatses = mUsageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, beginTime, endTime);
+		try {
+			if(usageStatses != null && usageStatses.size() >= 3){
+				Class<UsageStats> usageStatsClazz = UsageStats.class;
+				for(UsageStats usageStats : usageStatses){
+					String packageName = usageStats.getPackageName();
+					for(AutoBootAppInfo autoBootAppInfo : autoBootAppInfos){
+						if(autoBootAppInfo.desc.equals(packageName)){
+							int launchCount = usageStatsClazz
+									.getDeclaredField("mLaunchCount").getInt(usageStats);
+							long usageTime = usageStats.getTotalTimeInForeground();
+							autoBootAppInfo.boots = "自动重启：" + launchCount + "次";
+							autoBootAppInfo.runningTime = usageTime / 1000 + "s";
+						}
+					}
+				}
+			}
+
+			Class<?> cServiceManager = Class
+					.forName("android.os.ServiceManager");
+			Method mGetService = cServiceManager.getMethod("getService",
+					java.lang.String.class);
+			Object oRemoteService = mGetService.invoke(null, "usagestats");
+
+			// IUsageStats oIUsageStats =
+			// IUsageStats.Stub.asInterface(oRemoteService)
+			Class<?> cStub = Class
+					.forName("com.android.internal.app.IUsageStats$Stub");
+			Method mUsageStatsService = cStub.getMethod("asInterface",
+					android.os.IBinder.class);
+			Object oIUsageStats = mUsageStatsService.invoke(null,
+					oRemoteService);
+
+			// PkgUsageStats[] oPkgUsageStatsArray =
+			// mUsageStatsService.getAllPkgUsageStats();
+			Class<?> cIUsageStatus = Class
+					.forName("com.android.internal.app.IUsageStats");
+			Method mGetAllPkgUsageStats = cIUsageStatus.getMethod(
+					"getAllPkgUsageStats", (Class[]) null);
+			Object[] oPkgUsageStatsArray = (Object[]) mGetAllPkgUsageStats
+					.invoke(oIUsageStats, (Object[]) null);
+
+			Class<?> cPkgUsageStats = Class
+					.forName("com.android.internal.os.PkgUsageStats");
+
+			for (Object pkgUsageStats : oPkgUsageStatsArray) {
+				// get pkgUsageStats.packageName, pkgUsageStats.launchCount,
+				// pkgUsageStats.usageTime
+				String packageName = (String) cPkgUsageStats.getDeclaredField(
+						"packageName").get(pkgUsageStats);
+				for(AutoBootAppInfo autoBootAppInfo : autoBootAppInfos){
+					if(autoBootAppInfo.desc.equals(packageName)){
+						int launchCount = cPkgUsageStats
+								.getDeclaredField("launchCount").getInt(pkgUsageStats);
+						long usageTime = cPkgUsageStats.getDeclaredField("usageTime")
+								.getLong(pkgUsageStats);
+						autoBootAppInfo.boots = "自动重启：" + launchCount + "次";
+						autoBootAppInfo.runningTime = usageTime / 1000 + "s";
+					}
+				}
+			}
+		} catch (IllegalArgumentException e) {
+			e.printStackTrace();
+		} catch (IllegalAccessException e) {
+			e.printStackTrace();
+		} catch (InvocationTargetException e) {
+			e.printStackTrace();
+		} catch (NoSuchFieldException e) {
+			e.printStackTrace();
+		} catch (ClassNotFoundException e) {
+			e.printStackTrace();
+		} catch (NoSuchMethodException e) {
+			e.printStackTrace();
+		}
+	}
+
 }
